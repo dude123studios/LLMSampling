@@ -100,8 +100,10 @@ class ExperimentRunner:
                         
                         for ckpt in checkpoints:
                             if ckpt in l_data:
-                                # Stack for this (layer, ckpt) [N, dim]
+                                # Stack for this (layer, ckpt) [N, 1, dim] -> [N, dim]
                                 latents = torch.stack([r['latent_z'][l_idx][ckpt] for r in results])
+                                if latents.dim() > 2:
+                                    latents = latents.view(latents.shape[0], -1)
                                 
                                 # Normalize vectors for Cosine Sim
                                 # latents: [N, D]
@@ -111,7 +113,7 @@ class ExperimentRunner:
                                 N = latents.shape[0]
                                 if N > 1:
                                     # Cosine Matrix: [N, N]
-                                    cos_matrix = torch.mm(normalized_latents, normalized_latents.T)
+                                    cos_matrix = torch.mm(normalized_latents, normalized_latents.t())
                                     
                                     # We want average of off-diagonal elements
                                     # Sum of all elements - Trace (which is N)
