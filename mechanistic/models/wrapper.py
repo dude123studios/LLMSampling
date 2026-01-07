@@ -13,6 +13,16 @@ class LatentModelWrapper:
         
         print(f"Loading model: {config.model_name_or_path}...")
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name_or_path, trust_remote_code=config.trust_remote_code)
+        
+        # Robust Attention Config
+        attn_impl = config.attn_implementation
+        if attn_impl == "flash_attention_2":
+            try:
+                 import flash_attn
+            except ImportError:
+                 print("WARNING: flash_attn package not found. Falling back from 'flash_attention_2' to 'eager' attention.")
+                 attn_impl = "eager"
+
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_name_or_path,
             torch_dtype=getattr(torch, config.dtype),
@@ -20,7 +30,7 @@ class LatentModelWrapper:
             device_map=self.device,
             load_in_8bit=config.load_in_8bit,
             load_in_4bit=config.load_in_4bit,
-            attn_implementation=config.attn_implementation,
+            attn_implementation=attn_impl,
         )
         self.model.eval()
         

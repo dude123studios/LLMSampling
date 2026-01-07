@@ -72,6 +72,9 @@ class ExperimentRunner:
         
         for problem in problems:
             for temp in temperatures:
+                # OPTIMIZATION: Temp 0 only needs 1 sample
+                n_samples = 1 if temp == 0.0 else self.config.n_samples_per_problem
+                
                 # Request specific layers and Checkpoints
                 results = self.temp_sampler.sample(
                     problem['prompt'], 
@@ -79,35 +82,49 @@ class ExperimentRunner:
                     output_layers=self.config.variance_layers,
                     pooling_checkpoints=checkpoints,
                     max_new_tokens=max_tokens, # Override generation length
-                    stride=self.config.latent_sampling_stride # Pass stride optimization
+                    stride=self.config.latent_sampling_stride, # Pass stride optimization
+                    n_samples=n_samples # NEW: Pass separate n_samples
                 )
                 
                 # Check outcome format: latent_z should be Dict[layer, Dict[ckpt, tensor]]
                 first_z = results[0]['latent_z']
                 
-                # We need to flatten and compute variance per (layer, checkpoint)
-                variance_data = {} # Key: f"{layer}_{ckpt}" or nested dict? Dict is better for JSON
+                # Metric: Average Pairwise Cosine Similarity
+                similarity_data = {} # Key: layer_idx -> {ckpt: avg_sim}
                 
                 if isinstance(first_z, dict):
                     layer_indices = sorted(first_z.keys())
                     for l_idx in layer_indices:
-                        layer_var = {}
+                        layer_sim = {}
                         l_data = first_z[l_idx] # Dict[ckpt, tensor]
                         
                         for ckpt in checkpoints:
                             if ckpt in l_data:
-                                # Stack for this (layer, ckpt)
+                                # Stack for this (layer, ckpt) [N, dim]
                                 latents = torch.stack([r['latent_z'][l_idx][ckpt] for r in results])
                                 
-                                if latents.shape[0] > 1:
-                                    centered = latents - latents.mean(dim=0)
-                                    cov = (centered.T @ centered) / (latents.shape[0] - 1)
-                                    var = torch.trace(cov).item()
-                                else:
-                                    var = 0.0
-                                layer_var[ckpt] = var
+                                # Normalize vectors for Cosine Sim
+                                # latents: [N, D]
+                                norms = torch.norm(latents, p=2, dim=1, keepdim=True)
+                                normalized_latents = latents / (norms + 1e-8)
                                 
-                        variance_data[l_idx] = layer_var
+                                N = latents.shape[0]
+                                if N > 1:
+                                    # Cosine Matrix: [N, N]
+                                    cos_matrix = torch.mm(normalized_latents, normalized_latents.T)
+                                    
+                                    # We want average of off-diagonal elements
+                                    # Sum of all elements - Trace (which is N)
+                                    sum_all = torch.sum(cos_matrix)
+                                    sum_off_diag = sum_all - N
+                                    avg_sim = sum_off_diag / (N * (N - 1))
+                                    metric_val = avg_sim.item()
+                                else:
+                                    metric_val = 1.0 # Self-similarity is 1
+                                    
+                                layer_sim[ckpt] = metric_val
+                                
+                        similarity_data[l_idx] = layer_sim
                         
                 else: 
                      # Should not happen with current config, but safe fallback logic omitted for brevity
@@ -117,7 +134,7 @@ class ExperimentRunner:
                     "step": 2,
                     "problem_id": problem.get('id'),
                     "temperature": temp,
-                    "variance": variance_data, # {layer: {ckpt: var}}
+                    "layer_similarity": similarity_data, # {layer: {ckpt: sim}}
                     "generated_texts": [r['generated_text'] for r in results]
                 })
 

@@ -53,82 +53,77 @@ def abbreviate_label(text):
         text = text.replace(k, v)
     return text
 
-def plot_variance_vs_temp(df, output_dir):
-    """Step 2: Plot Variance vs Layer (for different Temps)"""
+def plot_layer_similarity_vs_layer(df, output_dir):
+    """Step 2: Plot Avg Cosine Similarity vs Layer (for different Temps)"""
     step2_df = df[df['step'] == 2]
     if step2_df.empty:
         print("No Step 2 data found.")
         return
 
-    # Data 'variance' column is now a dict {layer: {ckpt: var}}
-    # We need to normalize this into a long dataframe
+    # Data 'layer_similarity' column is now a dict {layer: {ckpt: sim}}
     
     records = []
     for _, row in step2_df.iterrows():
-        var_data = row['variance'] # {layer: {ckpt: var}}
+        sim_data = row.get('layer_similarity', row.get('variance', {})) # Backward compat
         temp = row['temperature']
         
-        if isinstance(var_data, dict):
-            for layer, ckpt_data in var_data.items():
+        if isinstance(sim_data, dict):
+            for layer, ckpt_data in sim_data.items():
                 if layer == "target": continue
                 
-                # We have multiple checkpoints. Let's create records for ALL for potential plotting
-                # But for the main "Variance vs Layer" plot, we'll use the MAX checkpoint
+                # Checkpoints: 32, 64, 128
                 if isinstance(ckpt_data, dict):
-                    max_ckpt = max(ckpt_data.keys())
-                    val = ckpt_data[max_ckpt]
-                    
-                    records.append({
-                        "Temperature": temp,
-                        "Layer": int(layer),
-                        "Variance": val,
-                        "Length": max_ckpt
-                    })
+                    for ckpt, val in ckpt_data.items():
+                        records.append({
+                            "Temperature": temp,
+                            "Layer": int(layer),
+                            "Similarity": val,
+                            "Checkpoint": int(ckpt)
+                        })
                 else: 
-                     # Fallback for old logs
+                     # Fallback
                      records.append({
                         "Temperature": temp,
                         "Layer": int(layer),
-                        "Variance": ckpt_data,
-                        "Length": "Full"
+                        "Similarity": ckpt_data,
+                        "Checkpoint": "Full"
                     })
-        else:
-            # Legacy/Target float
-            records.append({
-                "Temperature": temp,
-                "Layer": "Target",
-                "Variance": float(var_data)
-            })
             
     plot_df = pd.DataFrame(records)
+    if plot_df.empty:
+        print("No similarity data to plot for Step 2.")
+        return
+
+    # Plot Similarity vs Layer (Factored by Checkpoint)
+    # We want a plot where X=Layer, Y=Similarity, Hue=Temp.
+    # User requested: "graph of layer variance given by layer... 32 deep, 64 deep..."
+    # We can facet by Checkpoint or hue by checkpoint? 
+    # Let's do separate plots or subplots for each checkpoint to clearly see the bound.
     
-    # 1. Plot Variance vs Layer (Line plot, hue=Temp)
-    plt.figure(figsize=(10, 6))
-    
-    # Check if we have layer data or just target
-    if "Layer" in plot_df.columns and plot_df['Layer'].dtype != 'O':
-        sns.lineplot(
-            data=plot_df,
-            x='Layer',
-            y='Variance',
-            hue='Temperature',
-            palette="viridis",
-            linewidth=2,
-            marker='o'
-        )
-        plt.title("Latent Variance by Layer and Temperature")
-        plt.xlabel("Layer Index")
-        plt.ylabel("Trace(Covariance)")
+    checkpoints = sorted(list(set(plot_df['Checkpoint'])))
+    for ckpt in checkpoints:
+        ckpt_df = plot_df[plot_df['Checkpoint'] == ckpt]
         
-        path = os.path.join(output_dir, "variance_vs_layer.png")
-        plt.savefig(path, bbox_inches='tight', dpi=300)
-        print(f"Saved plot to {path}")
+        plt.figure(figsize=(10, 6))
         
-    else:
-        # Fallback to Var vs Temp if single layer
-        print("Plotting simple Var vs Temp (Single Layer)")
-        sns.lineplot(data=plot_df, x='Temperature', y='Variance')
-        plt.savefig(os.path.join(output_dir, "variance_vs_temp.png"))
+        if "Layer" in ckpt_df.columns:
+            sns.lineplot(
+                data=ckpt_df,
+                x='Layer',
+                y='Similarity',
+                hue='Temperature',
+                palette="viridis",
+                linewidth=2,
+                marker='o'
+            )
+            plt.title(f"Layer Similarity vs Layer (Gen Length: {ckpt})")
+            plt.xlabel("Layer Index")
+            plt.ylabel("Avg Cosine Similarity")
+            plt.ylim(0, 1.05) # Cosine similarity bound
+            
+            path = os.path.join(output_dir, f"similarity_vs_layer_ckpt_{ckpt}.png")
+            plt.savefig(path, bbox_inches='tight', dpi=300)
+            print(f"Saved plot to {path}")
 
 def plot_mani_dist(df, output_dir):
     """Step 3/4: Plot Distance to Correct Manifold"""
@@ -265,7 +260,7 @@ def main():
         set_style()
         df = load_latest_log(args.results_dir)
         
-        plot_variance_vs_temp(df, args.output_dir)
+        plot_layer_similarity_vs_layer(df, args.output_dir)
         plot_mani_dist(df, args.output_dir)
         plot_drift(df, args.output_dir)
         plot_attribution(df, args.output_dir)

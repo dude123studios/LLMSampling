@@ -11,7 +11,7 @@ model:
   model_name_or_path: "Qwen/Qwen3-8B"
   device: "cuda"
   dtype: "bfloat16"
-  attn_implementation: "flash_attention_2" # Use "eager" if flash-attn not installed
+  attn_implementation: "eager" # Use "flash_attention_2" for speed if supported
 
 generation:
   max_new_tokens: 128
