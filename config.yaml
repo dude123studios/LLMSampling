@@ -1,0 +1,51 @@
+experiment_name: "geometry_sampling_test"
+output_dir: "experiments/results"
+data_path: "data/raw/dataset.jsonl"
+
+n_samples_per_problem: 5
+temperatures: [0.0, 1.0]
+
+model:
+  model_name_or_path: "Qwen/Qwen3-8B"
+  device: "cuda"
+  dtype: "bfloat16"
+
+generation:
+  max_new_tokens: 128
+
+latent_sampling_stride: 32
+
+# Variance Experiment (1 / Step 2)
+variance_exp:
+  temperatures: [0.0, 0.5, 0.8, 1.0]
+  token_checkpoints: [32, 64, 128]
+  max_new_tokens: 128
+
+# Manifold Experiment (2 / Step 3 & 4)
+manifold_exp:
+  oracle_percentage: 0.3
+
+# Sensitivity Experiment (3 / Step 5)
+sensitivity_exp:
+  bifurcation_step_interval: 32
+  lookahead_tokens: 5
+  max_new_tokens: 64
+
+# Attribution Experiment (4 / Step 6)
+attribution_exp:
+  top_n_points: 200
+
+steering:
+  enabled: false
+
+# Clustering Experiment (6)
+clustering:
+  enabled: true
+  n_clusters: 3
+  judge_model: "deepseek/deepseek-r1-distill-qwen-32b"
+  judge_enabled: true
+  max_new_tokens: 256 # Short for testing, in production 2048
+
+oracle_model: "deepseek/deepseek-r1"
+target_layer: 22
+variance_layers: [5, 10, 15, 20, 25, 31]

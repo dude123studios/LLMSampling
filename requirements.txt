@@ -1,0 +1,12 @@
+torch
+transformers
+accelerate
+bitsandbytes
+scipy
+pandas
+matplotlib
+seaborn
+python-dotenv
+scikit-learn
+requests
+pyyaml

@@ -1,0 +1,4 @@
+{"timestamp": 1767749536.365234, "step": 5, "problem_id": "mock_0", "bifurcation_step": 2, "path_divergence": 0.0, "token1": 16, "token2": 17}
+{"timestamp": 1767749547.043864, "step": 5, "problem_id": "mock_0", "bifurcation_step": 4, "path_divergence": 0.0, "token1": 198, "token2": 362}
+{"timestamp": 1767749558.557705, "step": 5, "problem_id": "mock_0", "bifurcation_step": 6, "path_divergence": 0.0, "token1": 25, "token2": 362}
+{"timestamp": 1767749570.903139, "step": 5, "problem_id": "mock_0", "bifurcation_step": 8, "path_divergence": 0.0, "token1": 10, "token2": 30}
