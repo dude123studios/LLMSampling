@@ -9,6 +9,7 @@ class ModelConfig(BaseModel):
     trust_remote_code: bool = True
     load_in_8bit: bool = False
     load_in_4bit: bool = False
+    attn_implementation: str = "eager" # Use "flash_attention_2" for speed if supported
 
 class GenerationConfig(BaseModel):
     max_new_tokens: int = 1024
@@ -56,6 +57,10 @@ class ExperimentConfig(BaseModel):
     experiment_name: str
     output_dir: str = "experiments/results"
     data_path: str = "data/raw" # Path to where user puts external data
+    
+    # Task Config
+    task_name: str = "math" # Task name for external loader (e.g. "math", "gpqa")
+    dataset_limit: Optional[int] = None # Limit samples from dataset
     
     # Sampling parameters
     n_samples_per_problem: int = 10

@@ -10,3 +10,8 @@ python-dotenv
 scikit-learn
 requests
 pyyaml
+datasets
+tqdm
+openai
+termcolor
+numpy

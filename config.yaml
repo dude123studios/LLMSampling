@@ -1,6 +1,8 @@
 experiment_name: "geometry_sampling_test"
 output_dir: "experiments/results"
 data_path: "data/raw/dataset.jsonl"
+task_name: "math"
+dataset_limit: 100
 
 n_samples_per_problem: 5
 temperatures: [0.0, 1.0]
@@ -9,6 +11,7 @@ model:
   model_name_or_path: "Qwen/Qwen3-8B"
   device: "cuda"
   dtype: "bfloat16"
+  attn_implementation: "flash_attention_2" # Use "eager" if flash-attn not installed
 
 generation:
   max_new_tokens: 128

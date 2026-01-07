@@ -20,6 +20,7 @@ class LatentModelWrapper:
             device_map=self.device,
             load_in_8bit=config.load_in_8bit,
             load_in_4bit=config.load_in_4bit,
+            attn_implementation=config.attn_implementation,
         )
         self.model.eval()
         

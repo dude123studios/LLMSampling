@@ -29,8 +29,9 @@ def load_task_data(task_config, limit=None, seed=42):
     
     if task_config.name == "math":
         ds = load_dataset(task_config.dataset, split=task_config.split)
-        # Filter for Level 5
-        ds = ds.filter(lambda x: x['level'] == task_config.subset_level)
+        # Filter for Level 5 (if specified)
+        if task_config.subset_level is not None:
+             ds = ds.filter(lambda x: x['level'] == task_config.subset_level)
     elif task_config.name == "gpqa":
         ds = load_dataset(task_config.dataset, task_config.subset_name, split=task_config.split)
     elif task_config.name == "code":

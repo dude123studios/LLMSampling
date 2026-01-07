@@ -31,33 +31,7 @@ class TaskConfig:
         self.subset_level = subset_level
         self.subset_name = subset_name
 
-# Lazy load external loader
-def load_external_dataset(limit: int = None, seed: int = 42):
-    """
-    Imports the sampling_limits loader and returns the MATH Level 5 dataset.
-    """
-    try:
-        # Add external to sys.path
-        ext_path = os.path.join(os.getcwd(), "mechanistic", "external", "sampling_limits")
-        if ext_path not in sys.path:
-            sys.path.append(ext_path)
-            
-        from src.data.loader import load_task_data
-        
-        # Configure for MATH Level 5 as requested
-        config = TaskConfig(
-            name="math",
-            dataset="competition_math", # Updated from hendrycks/competition_math
-            split="test",
-            subset_level="Level 5"
-        )
-        
-        return load_task_data(config, limit=limit, seed=seed)
-        
-    except ImportError as e:
-        print(f"CRITICAL: Could not import 'src.data.loader': {e}")
-        print("Please ensure you have copied the repo contents as requested.")
-        raise
+
 
 class ExperimentRunner:
     def __init__(self, config_or_path: Union[str, ExperimentConfig] = "config.yaml"):
@@ -455,35 +429,100 @@ class ExperimentRunner:
             })
 
     def load_data(self, limit: int = None):
-        # Mock for Dry Run
-        if self.config.experiment_name.endswith("_DRYRUN"):
-            print("Loading MOCK data for Dry Run...")
-            return [{
-                "id": "mock_0",
-                "prompt": "User: What is 1+1?\nPlease solve this step by step.\nAssistant:",
-                "gold_solution": "2"
-            }]
-            
-        # Load real data
-        # Mapping dataset items to "prompt" format expected by runner
-        # dataset = load_external_dataset(limit=limit, seed=42) # Can't use limit here easily if loader takes it?
-        # load_external_dataset supports limit.
+        """
+        Loads data using the external sampling_limits loader.
+        Uses self.config.dataset_limit if limit is not provided.
+        """
+        # Determine effective limit
+        effective_limit = limit if limit is not None else self.config.dataset_limit
+        
+        # Add external to sys.path if not present
+        ext_path = os.path.join(os.getcwd(), "mechanistic", "external", "sampling_limits")
+        if ext_path not in sys.path:
+            sys.path.append(ext_path)
+
         try:
-             dataset = load_external_dataset(limit=limit, seed=42)
+            from src.data.loader import load_task_data
+        except ImportError as e:
+            print(f"CRITICAL ERROR: Could not import 'src.data.loader' from {ext_path}.")
+            print(f"Error details: {e}")
+            print("Running in strictly mock mode for dry-run if applicable.")
+            if self.config.experiment_name.endswith("_DRYRUN"):
+                 return [{
+                    "id": "mock_0",
+                    "prompt": "User: What is 1+1?\nPlease solve this step by step.\nAssistant:",
+                    "gold_solution": "2"
+                }]
+            return []
+
+        # Configure Task
+        # We reuse the local TaskConfig class or create a simple object
+        # The loader expects an object with .name, .dataset, .split, .subset_level/name
+        
+        task_name = self.config.task_name
+        
+        if task_name == "math":
+            task_conf = TaskConfig(
+                name="math",
+                dataset="lighteval/MATH-Hard", 
+                split="test",
+                subset_level=None # The new dataset structure might not have 'level' or requires different filtering
+            )
+        elif task_name == "gpqa":
+             task_conf = TaskConfig(
+                name="gpqa",
+                dataset="gpqa",
+                split="train", # GPQA often uses 'train' as main
+                subset_name="gpqa_diamond"
+             )
+        else:
+            print(f"WARNING: Unknown task name '{task_name}'. Defaulting to MATH Level 5.")
+            task_conf = TaskConfig(name="math", dataset="competition_math", split="test", subset_level="Level 5")
+            
+        print(f"Loading task '{task_conf.name}' with limit={effective_limit}...")
+        
+        try:
+            dataset = load_task_data(task_conf, limit=effective_limit, seed=42)
         except Exception as e:
              print(f"Error loading external dataset: {e}")
-             print("Please ensure internet collection and valid dataset name.")
+             # Fallback for dry run
+             if self.config.experiment_name.endswith("_DRYRUN"):
+                print("Fallback to single mock item for dry run.")
+                return [{
+                    "id": "mock_0",
+                    "prompt": "User: What is 1+1?\nPlease solve this step by step.\nAssistant:",
+                    "gold_solution": "2"
+                }]
              return []
         
         problems = []
         for item in dataset:
-            # Construct prompt for Qwen/DeepSeek
-            prompt = f"User: {item['problem']}\nPlease solve this step by step.\nAssistant:"
+            # Standardize prompt format
+            if 'problem' in item:
+                question = item['problem']
+            elif 'question' in item:
+                 question = item['question']
+            else:
+                question = str(item)
+
+            if 'solution' in item:
+                solution = item['solution']
+            elif 'answer' in item:
+                solution = item['answer']
+            else:
+                solution = ""
+
+            prompt = f"User: {question}\nPlease solve this step by step.\nAssistant:"
+            
+            # Unique ID
+            uid = item.get('unique_id', hash(question))
+            
             problems.append({
-                "id": f"math_{item.get('unique_id', hash(item['problem']))}",
+                "id": f"{task_name}_{uid}",
                 "prompt": prompt,
-                "gold_solution": item['solution']
+                "gold_solution": solution
             })
+            
         return problems
 
     def run(self, limit: int = None, steps: list = None):
@@ -535,6 +574,7 @@ def main():
         config.model.load_in_8bit = False
         config.model.load_in_4bit = False
         config.model.device = "cpu" # Force CPU for dry run to avoid CUDA/MPS issues
+        config.model.attn_implementation = "eager" # Force eager for CPU/GPT2
         config.target_layer = 10 # Safe for GPT-2 (12 layers)
         
         # Exp 1
