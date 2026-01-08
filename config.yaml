@@ -39,6 +39,13 @@ sensitivity_exp:
 attribution_exp:
   top_n_points: 200
 
+# Steering Experiment (Step 8)
+steering_exp:
+  layers: [20, 25, 30, 34]
+  n_directions: 10
+  strength_multiplier: 3.0
+  n_rollouts: 1
+
 steering:
   enabled: false
 

@@ -448,6 +448,146 @@ class ExperimentRunner:
                 "cluster_labels": labels.tolist()
             })
 
+    def run_step_8_steering_rollout(self, problems):
+        """Step 8: Steering Experiment - PCA Directions"""
+        print("Running Step 8: Steering Rollouts...")
+        
+        from mechanistic.sampling.strategies import VectorSteeredSampler
+        
+        steered_sampler = VectorSteeredSampler(self.model, self.config)
+        target_layers = self.config.steering_exp.layers
+        n_directions = self.config.steering_exp.n_directions
+        strength = self.config.steering_exp.strength_multiplier
+        
+        for problem in problems:
+            # 1. Sample baseline for PCA
+            # We need enough samples to compute meaningful PCA
+            print(f"Sampling baseline for PCA on problem {problem.get('id')}...")
+            baseline_samples = self.temp_sampler.sample(
+                problem['prompt'],
+                temperature=1.0, 
+                max_new_tokens=64, # Short generation for direction finding
+                output_layers=target_layers,
+                pooling_checkpoints=[32] # Just one check point for direction? or Stride? 
+                # Let's simple capture all tokens? No, get_latents returns pooled.
+                # Currently get_latents with "pooling_checkpoints" returns dict {ckpt: tensor}
+                # If we want raw latents for PCA, we ideally want the latents of the generated tokens.
+                # get_latents supports this.
+            )
+            
+            # 2. Compute directions for each layer
+            # We need to aggregate latents [N_samples, D] for each layer
+            directions_by_layer = {}
+            
+            # Access latent_z from baseline
+            # latent_z structure: {layer: {ckpt: tensor}}
+            first_z = baseline_samples[0]['latent_z']
+            
+            import torch
+            
+            for layer in target_layers:
+                if layer not in first_z:
+                    print(f"Warning: Layer {layer} data not found in baseline.")
+                    continue
+                    
+                # Stack all samples for this layer
+                # We use the pooled representation (e.g. at token 32) as the "state"
+                # Or should we use the whole trajectory? User said "compute ... on each of layer".
+                # Using the pooled vector is a reasonable proxy for the "thought vector"
+                
+                # Check structure
+                # r['latent_z'][layer] is Dict[ckpt, tensor]
+                # We assume we used pooling_checkpoints=[32]. So take key 32.
+                ckpt_key = 32
+                if ckpt_key not in first_z[layer]:
+                    ckpt_key = list(first_z[layer].keys())[0]
+                
+                # Stack [N_samples, Dim]
+                vectors = torch.stack([r['latent_z'][layer][ckpt_key] for r in baseline_samples])
+                
+                # Compute PCA
+                # VectorSteeredSampler has a helper for this but it stores it internally in 'computed_directions'.
+                # But here we have multiple layers. The sampler assumes a single set of directions?
+                # The sampler's `compute_directions` is generic.
+                # Let's use it or just call SVD here.
+                
+                # Center
+                mean = vectors.mean(dim=0)
+                centered = vectors - mean
+                U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
+                
+                # Top N
+                comps = Vh[:n_directions] # [N_dirs, Dim]
+                directions_by_layer[layer] = comps
+                
+            # 3. Rollouts with Steering
+            print(f"Running steered rollouts for problem {problem.get('id')}...")
+            
+            steered_results = []
+            
+            for layer, directions in directions_by_layer.items():
+                for i in range(len(directions)):
+                    direction_vec = directions[i] # [Dim]
+                    
+                    # Prepare info for logging
+                    meta = {"layer": layer, "direction_idx": i}
+                    
+                    # Apply steering manually via sampler or use wrapper?
+                    # VectorSteeredSampler.sample takes 'direction_idx' which refers to cached directions. 
+                    # But we have multiple layers.
+                    # We can pass the vector DIRECTLY if we modify sampler or use model generate directly.
+                    # Or we can temporarily set the sampler's cache.
+                    
+                    steered_sampler.computed_directions = {0: direction_vec}
+                    # We also need to hack the config's target layer dynamically?
+                    # The sampler reads `self.config.steering.target_layer`.
+                    # We should probably update the config object (it's mutable).
+                    
+                    original_layer = self.config.steering.target_layer
+                    original_strength = self.config.steering.strength
+                    
+                    self.config.steering.target_layer = layer
+                    self.config.steering.strength = strength
+                    
+                    try:
+                        # n_rollouts from config (default 1)
+                        # We force n_samples_per_problem to 1 for this loop if n_rollouts is 1? 
+                        # Or use the config value? User said "in each of 10 rollouts apply one such vector"
+                        # implying 1 rollout per vector.
+                        
+                        original_n_samples = self.config.n_samples_per_problem
+                        self.config.n_samples_per_problem = self.config.steering_exp.n_rollouts
+                        
+                        res_list = steered_sampler.sample(
+                            problem['prompt'], 
+                            direction_idx=0, # Use the one we injected
+                            max_new_tokens=64
+                        )
+                        
+                        for r in res_list:
+                            r.update(meta)
+                            steered_results.append(r)
+                            
+                    finally:
+                        # Restore config
+                        self.config.steering.target_layer = original_layer
+                        self.config.steering.strength = original_strength
+                        self.config.n_samples_per_problem = original_n_samples
+                        
+            # Log all steered results for this problem
+            self.logger.log({
+                "step": 8,
+                "problem_id": problem.get('id'),
+                "steered_generations": [
+                    {
+                        "layer": r.get('layer'),
+                        "direction": r.get('direction_idx'),
+                        "text": r.get('generated_text')
+                    }
+                    for r in steered_results
+                ]
+            })
+
     def load_data(self, limit: int = None):
         """
         Loads data using the external sampling_limits loader.
@@ -563,6 +703,7 @@ class ExperimentRunner:
         if should_run(5): self.run_step_5_sensitivity(problems)
         if should_run(6): self.run_step_6_attribution()
         if should_run(7): self.run_step_7_clustering(problems)
+        if should_run(8): self.run_step_8_steering_rollout(problems)
 
 def main():
     import argparse

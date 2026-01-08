@@ -52,6 +52,14 @@ class SensitivityExpConfig(BaseModel):
 class AttributionExpConfig(BaseModel):
     enabled: bool = True
     top_n_points: int = 200 # Number of bifurcation points to analyze
+
+class SteeringExpConfig(BaseModel):
+    enabled: bool = True
+    layers: List[int] = [20, 25, 30, 34] # Layers to compute/apply vectors on
+    n_directions: int = 10 # Number of PCA components
+    strength_multiplier: float = 3.0 # Multiplier for the unit direction vector
+    n_rollouts: int = 10 # Number of rollouts per vector (though user said "in each of 10 rollouts apply one such vector", meaning 1 rollout per vector?)
+    # "in each of 10 rollouts apply one such vector" -> 10 vectors, 1 rollout each. So n_rollouts=1 per vector.
     
 class ExperimentConfig(BaseModel):
     experiment_name: str
@@ -88,6 +96,9 @@ class ExperimentConfig(BaseModel):
     
     # For Step 2 & 5
     steering: SteeringConfig = Field(default_factory=SteeringConfig)
+    
+    # Exp 8 (Steering Rollouts)
+    steering_exp: SteeringExpConfig = Field(default_factory=SteeringExpConfig)
     
     # For Step 7 (Clustering)
     clustering: ClusteringExpConfig = Field(default_factory=ClusteringExpConfig)
