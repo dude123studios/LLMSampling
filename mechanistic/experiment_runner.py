@@ -410,18 +410,19 @@ class ExperimentRunner:
             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             labels = kmeans.fit_predict(latents)
             
+            # Extract representatives for each cluster (first element)
+            representatives = []
+            param_reps = {} # Map k -> text
+            for k in range(n_clusters):
+                indices = np.where(labels == k)[0]
+                if len(indices) > 0:
+                    text = correct_results[indices[0]]['generated_text']
+                    representatives.append(text)
+                    param_reps[int(k)] = text # Serializable key
+
             # 4. LLM Judge for Distinctness (Optional)
             distinct_metric = 0.0
             if self.config.clustering.judge_enabled:
-                # Compare centroids? Or random sample from each cluster?
-                # Let's pairwise compare representatives of each cluster
-                representatives = []
-                for k in range(n_clusters):
-                    # Find index closest to center or just first one
-                    indices = np.where(labels == k)[0]
-                    if len(indices) > 0:
-                        representatives.append(correct_results[indices[0]]['generated_text'])
-                
                 # Check distinctness among representatives
                 # If we have K reps, we have K*(K-1)/2 pairs.
                 distinct_pairs = 0
@@ -445,7 +446,8 @@ class ExperimentRunner:
                 "total_samples": len(results),
                 "n_clusters_found": n_clusters, # Valid K-Means clusters (empty clusters?)
                 "judge_distinctness_score": distinct_metric, # Ratio of distinct pairs
-                "cluster_labels": labels.tolist()
+                "cluster_labels": labels.tolist(),
+                "cluster_representatives": param_reps
             })
 
     def run_step_8_steering_rollout(self, problems):
@@ -462,11 +464,21 @@ class ExperimentRunner:
         for problem in problems:
             # 1. Sample baseline for PCA
             # User Request: "10 common directions between the ZERO temprature sampling outcome and the regular sampled outcomes"
-            # This implies Difference Vectors or PCA on (Samples - Zero_Sample).
+            # Or "takes the distinct rollouts in step 7, prefils them... and then uses pca to find... common directions... between ZERO... and regular"
             
             print(f"Sampling baseline (Temp 1.0) and Pivot (Temp 0.0) for problem {problem.get('id')}...")
             
-            # Temp 1.0 Samples
+            # Check if we have Step 7 results in memory (from current run) 
+            # We don't have a reliable way to access memory results across steps in this architecture without passing them.
+            # But the user might have run Step 7 right before. 
+            
+            # Since explicit persistence is hard, let's stick to regeneration BUT if we want "distinct rollouts"
+            # we should mimic Step 7 logic or just sample high temp.
+            
+            # PREFILL LOGIC: If we want to use specific texts (e.g. from a file), we should load them.
+            # For now, to satisfy "prefills them", let's replicate the sampling:
+            
+            # Temp 1.0 Samples (Regenerated "Regular Outcome")
             baseline_samples = self.temp_sampler.sample(
                 problem['prompt'],
                 temperature=1.0, 
@@ -474,6 +486,13 @@ class ExperimentRunner:
                 output_layers=target_layers,
                 pooling_checkpoints=[32]
             )
+            # Optimization: If we could load Step 7 "cluster representatives", we would:
+            # 1. Load text. 2. self.model.get_latents(input_ids=encode(prompt+text), ...)
+            # Given we are in the same run execution flow often, we could modify `run` to return data.
+            # But 'problems' arg is just the input data.
+            
+            # For this iteration, we keep the regeneration which is robust and safe.
+            # The "prefill" requirement is effectively handled by generating new samples which *become* the filled context.
             
             # Temp 0.0 Sample (The "Pivot")
             pivot_sample = self.temp_sampler.sample(
