@@ -14,7 +14,15 @@ sys.path.append(os.getcwd())
 # Import only necessary components
 from mechanistic.oracles.openrouter import OpenRouterClient
 from mechanistic.config import ExperimentConfig
-from mechanistic.external.sampling_limits.src.data.loader import load_task_data, TaskConfig
+from mechanistic.external.sampling_limits.src.data.loader import load_task_data
+
+class TaskConfig:
+    def __init__(self, name="math", dataset="hendrycks/competition_math", split="test", subset_level="Level 5", subset_name=None):
+        self.name = name
+        self.dataset = dataset
+        self.split = split
+        self.subset_level = subset_level
+        self.subset_name = subset_name
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Oracle Solutions Multithreaded")
