@@ -461,19 +461,29 @@ class ExperimentRunner:
         
         for problem in problems:
             # 1. Sample baseline for PCA
-            # We need enough samples to compute meaningful PCA
-            print(f"Sampling baseline for PCA on problem {problem.get('id')}...")
+            # User Request: "10 common directions between the ZERO temprature sampling outcome and the regular sampled outcomes"
+            # This implies Difference Vectors or PCA on (Samples - Zero_Sample).
+            
+            print(f"Sampling baseline (Temp 1.0) and Pivot (Temp 0.0) for problem {problem.get('id')}...")
+            
+            # Temp 1.0 Samples
             baseline_samples = self.temp_sampler.sample(
                 problem['prompt'],
                 temperature=1.0, 
-                max_new_tokens=64, # Short generation for direction finding
+                max_new_tokens=64,
                 output_layers=target_layers,
-                pooling_checkpoints=[32] # Just one check point for direction? or Stride? 
-                # Let's simple capture all tokens? No, get_latents returns pooled.
-                # Currently get_latents with "pooling_checkpoints" returns dict {ckpt: tensor}
-                # If we want raw latents for PCA, we ideally want the latents of the generated tokens.
-                # get_latents supports this.
+                pooling_checkpoints=[32]
             )
+            
+            # Temp 0.0 Sample (The "Pivot")
+            pivot_sample = self.temp_sampler.sample(
+                problem['prompt'],
+                temperature=0.0,
+                max_new_tokens=64,
+                output_layers=target_layers,
+                pooling_checkpoints=[32],
+                n_samples=1
+            )[0]
             
             # 2. Compute directions for each layer
             # We need to aggregate latents [N_samples, D] for each layer
@@ -505,15 +515,19 @@ class ExperimentRunner:
                 # Stack [N_samples, Dim]
                 vectors = torch.stack([r['latent_z'][layer][ckpt_key] for r in baseline_samples])
                 
-                # Compute PCA
-                # VectorSteeredSampler has a helper for this but it stores it internally in 'computed_directions'.
-                # But here we have multiple layers. The sampler assumes a single set of directions?
-                # The sampler's `compute_directions` is generic.
-                # Let's use it or just call SVD here.
+                # Get Pivot [1, Dim]
+                pivot = pivot_sample['latent_z'][layer][ckpt_key]
+                if pivot.dim() == 1: pivot = pivot.unsqueeze(0)
                 
-                # Center
-                mean = vectors.mean(dim=0)
-                centered = vectors - mean
+                # SVD requires float32 or float64
+                vectors = vectors.float()
+                pivot = pivot.float()
+                
+                # User Request: "directions between ZERO temprature ... and regular"
+                # Difference: x_i - x_0
+                centered = vectors - pivot
+                
+                # We want directions capturing this variance. SVD on these differences.
                 U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
                 
                 # Top N
