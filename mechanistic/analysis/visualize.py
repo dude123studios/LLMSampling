@@ -26,18 +26,34 @@ def set_style():
     plt.rcParams['axes.spines.top'] = False
     plt.rcParams['axes.spines.right'] = False
 
-def load_latest_log(results_dir):
+def load_all_logs(results_dir):
+    """Loads and merges all non-DRYRUN log files."""
     files = glob.glob(os.path.join(results_dir, "*.jsonl"))
     if not files:
         raise FileNotFoundError(f"No log files found in {results_dir}")
-    latest_file = max(files, key=os.path.getctime)
-    print(f"Loading log file: {latest_file}")
+    
+    # Filter out DRYRUN
+    files = [f for f in files if "DRYRUN" not in f]
+    if not files:
+        print("Warning: Only DRYRUN logs found. Loading those instead.")
+        files = glob.glob(os.path.join(results_dir, "*DRYRUN*.jsonl"))
+        
+    print(f"Loading {len(files)} log files...")
     
     data = []
-    with open(latest_file, 'r') as f:
-        for line in f:
-            if line.strip():
-                data.append(json.loads(line))
+    for file_path in files:
+        print(f"  - {os.path.basename(file_path)}")
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    if line.strip():
+                        data.append(json.loads(line))
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+            
+    if not data:
+        return pd.DataFrame()
+        
     return pd.DataFrame(data)
 
 def abbreviate_label(text):
@@ -53,77 +69,124 @@ def abbreviate_label(text):
         text = text.replace(k, v)
     return text
 
-def plot_layer_similarity_vs_layer(df, output_dir):
-    """Step 2: Plot Avg Cosine Similarity vs Layer (for different Temps)"""
+def plot_similarity_analysis(df, output_dir):
+    """Step 2: Plot Avg Cosine Similarity vs Temperature (Faceted by Layer, Hue by Depth)"""
     step2_df = df[df['step'] == 2]
     if step2_df.empty:
         print("No Step 2 data found.")
         return
 
-    # Data 'layer_similarity' column is now a dict {layer: {ckpt: sim}}
-    
     records = []
     for _, row in step2_df.iterrows():
-        sim_data = row.get('layer_similarity', row.get('variance', {})) # Backward compat
+        sim_data = row.get('layer_similarity', row.get('variance', {}))
         temp = row['temperature']
         
         if isinstance(sim_data, dict):
             for layer, ckpt_data in sim_data.items():
                 if layer == "target": continue
                 
-                # Checkpoints: 32, 64, 128
                 if isinstance(ckpt_data, dict):
                     for ckpt, val in ckpt_data.items():
                         records.append({
                             "Temperature": temp,
                             "Layer": int(layer),
                             "Similarity": val,
-                            "Checkpoint": int(ckpt)
+                            "Depth": int(ckpt)
                         })
                 else: 
-                     # Fallback
                      records.append({
                         "Temperature": temp,
                         "Layer": int(layer),
                         "Similarity": ckpt_data,
-                        "Checkpoint": "Full"
+                        "Depth": "Full"
                     })
             
     plot_df = pd.DataFrame(records)
     if plot_df.empty:
-        print("No similarity data to plot for Step 2.")
+        print("No similarity data to plot.")
         return
 
-    # Plot Similarity vs Layer (Factored by Checkpoint)
-    # We want a plot where X=Layer, Y=Similarity, Hue=Temp.
-    # User requested: "graph of layer variance given by layer... 32 deep, 64 deep..."
-    # We can facet by Checkpoint or hue by checkpoint? 
-    # Let's do separate plots or subplots for each checkpoint to clearly see the bound.
+    # User Request: "side by side graphs for each layer ... variance based on temperature at all depths"
+    # X=Temp, Y=Similarity, Hue=Depth, Col=Layer
     
-    checkpoints = sorted(list(set(plot_df['Checkpoint'])))
-    for ckpt in checkpoints:
-        ckpt_df = plot_df[plot_df['Checkpoint'] == ckpt]
+    unique_layers = sorted(plot_df['Layer'].unique())
+    num_layers = len(unique_layers)
+    
+    # Setup Subplots (wrap cols)
+    cols = 4 # Adjust based on number of layers
+    rows = (num_layers + cols - 1) // cols
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(cols*4, rows*3), sharey=True)
+    if rows == 1 and cols == 1: axes = [axes]
+    axes = axes.flatten() if num_layers > 1 else [axes]
+    
+    for i, layer in enumerate(unique_layers):
+        ax = axes[i]
+        layer_df = plot_df[plot_df['Layer'] == layer]
         
-        plt.figure(figsize=(10, 6))
+        sns.lineplot(
+            data=layer_df,
+            x='Temperature',
+            y='Similarity',
+            hue='Depth',
+            palette="viridis",
+            marker='o',
+            ax=ax
+        )
+        ax.set_title(f"Layer {layer}")
+        ax.set_xlabel("Temperature" if i >= (rows-1)*cols else "")
+        ax.set_ylabel("Avg Cosine Similarity" if i % cols == 0 else "")
+        if i != 0: ax.legend_.remove() # Only show legend on first/last or distinct?
         
-        if "Layer" in ckpt_df.columns:
-            sns.lineplot(
-                data=ckpt_df,
-                x='Layer',
-                y='Similarity',
-                hue='Temperature',
-                palette="viridis",
-                linewidth=2,
-                marker='o'
-            )
-            plt.title(f"Layer Similarity vs Layer (Gen Length: {ckpt})")
-            plt.xlabel("Layer Index")
-            plt.ylabel("Avg Cosine Similarity")
-            plt.ylim(0, 1.05) # Cosine similarity bound
+    plt.tight_layout()
+    path = os.path.join(output_dir, "similarity_vs_temp_by_layer.png")
+    plt.savefig(path, bbox_inches='tight', dpi=300)
+    print(f"Saved plot to {path}")
+
+
+def plot_attribution(df, output_dir):
+    """Step 6: Logit Difference Attribution (Bar Plot via User Request)"""
+    step6_df = df[df['step'] == 6]
+    if step6_df.empty:
+        return
+        
+    records = []
+    for _, row in step6_df.iterrows():
+        contribs = row['layer_contributions'] # List[float]
+        for i, val in enumerate(contribs):
+            label = "Embed" if i == 0 else f"L{i-1}"
+            records.append({
+                "Layer Name": label,
+                "Layer Index": i,
+                "Contribution": val
+            })
             
-            path = os.path.join(output_dir, f"similarity_vs_layer_ckpt_{ckpt}.png")
-            plt.savefig(path, bbox_inches='tight', dpi=300)
-            print(f"Saved plot to {path}")
+    plot_df = pd.DataFrame(records)
+    
+    # User Request: "bar graph for each layer that goes pos or negative"
+    # We aggregate by layer -> Mean + Std/CI
+    
+    plt.figure(figsize=(14, 6))
+    
+    sns.barplot(
+        data=plot_df,
+        x='Layer Name',
+        y='Contribution',
+        color=COLORS['data_point'],
+        edgecolor='black',
+        errorbar=('ci', 95) # Show confidence intervals
+    )
+    
+    plt.axhline(0, color='black', linewidth=1)
+    
+    plt.title("Mean Layer Attribution to Top-1 vs Top-2 Logit Difference")
+    plt.xlabel("Layer")
+    plt.ylabel("Avg Logit Diff Contribution")
+    plt.xticks(rotation=45)
+    
+    path = os.path.join(output_dir, "logit_attribution_bar.png")
+    plt.savefig(path, bbox_inches='tight', dpi=300)
+    print(f"Saved plot to {path}")
 
 def plot_mani_dist(df, output_dir):
     """Step 3/4: Plot Distance to Correct Manifold"""
@@ -174,55 +237,7 @@ def plot_drift(df, output_dir):
     plt.savefig(os.path.join(output_dir, "prefix_forcing_drift.png"), bbox_inches='tight', dpi=300)
     print(f"Saved plot to {os.path.join(output_dir, 'prefix_forcing_drift.png')}")
 
-def plot_attribution(df, output_dir):
-    """Step 6: Logit Difference Attribution"""
-    step6_df = df[df['step'] == 6]
-    if step6_df.empty:
-        return
-        
-    # Data is 'layer_contributions': list of floats
-    # Expand into rows for seaborn
-    # We want to aggregate across all samples to show the "average circuit"
-    
-    # Create long-form DF
-    records = []
-    for _, row in step6_df.iterrows():
-        contribs = row['layer_contributions']
-        for i, val in enumerate(contribs):
-            label = "Embed" if i == 0 else f"L{i-1}"
-            records.append({
-                "Layer": label,
-                "LayerIdx": i,
-                "Contribution": val
-            })
-            
-    plot_df = pd.DataFrame(records)
-    
-    plt.figure(figsize=(12, 6))
-    
-    # Boxplot to show distribution of contributions
-    sns.boxplot(
-        data=plot_df,
-        x='Layer',
-        y='Contribution',
-        color=COLORS['data_point'], # Blue boxes
-        boxprops={'edgecolor': 'black', 'linewidth': 1},
-        medianprops={'color': COLORS['fit_line'], 'linewidth': 2},
-        showfliers=False # Hide outliers for cleanliness, or True to see extremes
-    )
-    
-    # Add a horizontal line at 0
-    plt.axhline(0, color='black', linewidth=1, linestyle='--')
-    
-    plt.title("Layer Attribution to Top-1 vs Top-2 Logit Diff")
-    plt.xlabel("Layer")
-    plt.ylabel("contrib to logit(y1) - logit(y2)")
-    plt.xticks(rotation=45)
-    
-    # Save
-    path = os.path.join(output_dir, "logit_attribution.png")
-    plt.savefig(path, bbox_inches='tight', dpi=300)
-    print(f"Saved plot to {path}")
+
 
 def plot_clustering_distinctness(df, output_dir):
     """Step 7: Clustering & Distinctness"""
@@ -258,9 +273,9 @@ def main():
     
     try:
         set_style()
-        df = load_latest_log(args.results_dir)
+        df = load_all_logs(args.results_dir)
         
-        plot_layer_similarity_vs_layer(df, args.output_dir)
+        plot_similarity_analysis(df, args.output_dir)
         plot_mani_dist(df, args.output_dir)
         plot_drift(df, args.output_dir)
         plot_attribution(df, args.output_dir)

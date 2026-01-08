@@ -68,6 +68,7 @@ class ExperimentConfig(BaseModel):
     temperatures: List[float] = Field(default_factory=lambda: [0.0, 0.2, 0.5, 0.8, 1.0])
     seeds: Optional[List[int]] = None
     latent_sampling_stride: int = 32 # Sample every N tokens to save memory
+    latent_pooling_window: Optional[int] = 8 # Number of strides to look back for pooling (None = full history)
     
     # Model & Generation
     model: ModelConfig = Field(default_factory=ModelConfig)

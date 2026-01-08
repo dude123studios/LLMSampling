@@ -131,7 +131,8 @@ class LatentModelWrapper:
                    layers: Union[List[int], str] = "target", # "all", "target", or list
                    target_layer_idx: int = None, # If None, use config
                    pooling_checkpoints: Optional[List[int]] = None, # List of token counts to pool over
-                   stride: int = 1
+                   stride: int = 1,
+                   pooling_window: Optional[int] = None # Number of strides to look back
                    ) -> Union[torch.Tensor, Dict[int, Union[torch.Tensor, Dict[int, torch.Tensor]]]]:
         """
         Extracts latent representations.
@@ -200,7 +201,12 @@ class LatentModelWrapper:
                     strided_end = min(strided_end, state.shape[1])
                     
                     if strided_end > strided_prompt_len:
-                        pooled = state[:, strided_prompt_len:strided_end, :].mean(dim=1)
+                        start_idx = strided_prompt_len
+                        if pooling_window:
+                            # If window is set, only pool over the last N strides
+                            start_idx = max(strided_prompt_len, strided_end - pooling_window)
+                            
+                        pooled = state[:, start_idx:strided_end, :].mean(dim=1)
                     else:
                         pooled = state[:, -1, :] 
                         
@@ -278,12 +284,15 @@ class LatentModelWrapper:
             # to get the stable representation of the final answer
             # We pass prompt_length to pool only generated tokens
             stride = int(kwargs.get("stride", 1))
+            pooling_window = kwargs.get("pooling_window")
+            
             latent_z_or_dict = self.get_latents(
                 output_ids.unsqueeze(0), 
                 prompt_length=input_len,
                 layers=output_layers,
                 pooling_checkpoints=pooling_checkpoints,
-                stride=stride
+                stride=stride,
+                pooling_window=pooling_window
             ) # [1, dim] or Dict[int, Tensor]
             
             # If it's a dict, keep it as dict. If tensor, keep tensor.

@@ -1,3 +1,4 @@
 .env
 .agent/rules
+.experiments/*
 mechanistic/external/sampling_limits/src/__pycache__

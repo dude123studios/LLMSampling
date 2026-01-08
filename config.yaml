@@ -17,6 +17,7 @@ generation:
   max_new_tokens: 128
 
 latent_sampling_stride: 32
+latent_pooling_window: 8
 
 # Variance Experiment (1 / Step 2)
 variance_exp:

@@ -83,6 +83,7 @@ class ExperimentRunner:
                     pooling_checkpoints=checkpoints,
                     max_new_tokens=max_tokens, # Override generation length
                     stride=self.config.latent_sampling_stride, # Pass stride optimization
+                    pooling_window=self.config.latent_pooling_window, # Pass pooling window optimization
                     n_samples=n_samples # NEW: Pass separate n_samples
                 )
                 
