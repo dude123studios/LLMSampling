@@ -575,14 +575,46 @@ class ExperimentRunner:
                         self.config.n_samples_per_problem = original_n_samples
                         
             # Log all steered results for this problem
+            # NEW: Calculate Pass@k for each layer
+            from mechanistic.external.sampling_limits.src.evaluation.math_grader import grade_math
+            from mechanistic.external.sampling_limits.src.evaluation.metrics import estimate_pass_at_k
+            from collections import defaultdict
+            
+            layer_texts = defaultdict(list)
+            for r in steered_results:
+                layer_texts[r['layer']].append(r['generated_text'])
+                
+            layer_metrics = {}
+            for layer, texts in layer_texts.items():
+                correct_count = 0
+                for text in texts:
+                    if grade_math(text, problem['gold_solution']):
+                        correct_count += 1
+                
+                # Check if we have enough samples for k=10
+                n = len(texts)
+                k_values = [1]
+                if n >= 10:
+                    k_values.append(10)
+                    
+                pk = estimate_pass_at_k(n, correct_count, k_values)
+                layer_metrics[layer] = {
+                    "num_samples": n,
+                    "num_correct": correct_count,
+                    "pass@1": pk.get("pass@1", 0.0),
+                    "pass@10": pk.get("pass@10", 0.0)
+                }
+            
             self.logger.log({
                 "step": 8,
                 "problem_id": problem.get('id'),
+                "layer_metrics": layer_metrics,
                 "steered_generations": [
                     {
                         "layer": r.get('layer'),
                         "direction": r.get('direction_idx'),
-                        "text": r.get('generated_text')
+                        "text": r.get('generated_text'),
+                        "is_correct": grade_math(r.get('generated_text'), problem['gold_solution'])
                     }
                     for r in steered_results
                 ]
