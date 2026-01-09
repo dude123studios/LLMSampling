@@ -80,7 +80,7 @@ class VectorSteeredSampler(BaseSampler):
         self.computed_directions = {i: components[i] for i in range(n_components)}
         return self.computed_directions
 
-    def sample(self, prompt: str, direction_idx: int = 0, sign: float = 1.0) -> List[Dict]:
+    def sample(self, prompt: str, direction_idx: int = 0, sign: float = 1.0, **kwargs) -> List[Dict]:
         """
         Sample with +strength * direction added to residual stream.
         """
@@ -88,6 +88,7 @@ class VectorSteeredSampler(BaseSampler):
             raise ValueError(f"Direction {direction_idx} not computed yet.")
             
         direction = self.computed_directions[direction_idx]
+        # Allow strength override if user modified config
         strength = self.config.steering.strength * sign
         
         steering_vector = direction * strength
@@ -99,5 +100,6 @@ class VectorSteeredSampler(BaseSampler):
         return self.model.generate(
             [prompt] * self.config.n_samples_per_problem,
             self.config.generation,
-            steering_vectors=steering_dict
+            steering_vectors=steering_dict,
+            **kwargs
         )
