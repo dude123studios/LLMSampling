@@ -9,12 +9,16 @@ class ExperimentLogger:
         self.output_dir = output_dir
         self.experiment_name = experiment_name
         
-        os.makedirs(output_dir, exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self.log_file = os.path.join(output_dir, f"{experiment_name}_{timestamp}.jsonl")
+        # Create a dedicated folder for this run
+        self.run_dir = os.path.join(output_dir, f"{experiment_name}_{timestamp}")
+        os.makedirs(self.run_dir, exist_ok=True)
+        
+        self.log_file = os.path.join(self.run_dir, "results.jsonl")
         self.lock = Lock()
         
-        print(f"Logging to {self.log_file}")
+        print(f"Logging run to folder: {self.run_dir}")
+        print(f"Main log file: {self.log_file}")
 
     def log(self, data: Dict[str, Any]):
         """Thread-safe logging of a single dictionary record."""

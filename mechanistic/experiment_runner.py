@@ -588,13 +588,15 @@ class ExperimentRunner:
                         # Or use the config value? User said "in each of 10 rollouts apply one such vector"
                         # implying 1 rollout per vector.
                         
+                        print(f"  > Layer {layer}, Dir {i}, Strength {strength}")
+                        
                         original_n_samples = self.config.n_samples_per_problem
                         self.config.n_samples_per_problem = self.config.steering_exp.n_rollouts
                         
                         res_list = steered_sampler.sample(
                             problem['prompt'], 
                             direction_idx=0, # Use the one we injected
-                            max_new_tokens=64
+                            max_new_tokens=2048
                         )
                         
                         for r in res_list:
@@ -638,19 +640,29 @@ class ExperimentRunner:
                     "pass@10": pk.get("pass@10", 0.0)
                 }
             
+            # 1. Log Individual Rollouts (Verbose)
+            for r in steered_results:
+                is_correct = grade_math(r.get('generated_text'), problem['gold_solution'])
+                self.logger.log({
+                    "step": 8,
+                    "type": "steering_rollout", # Sub-type
+                    "problem_id": problem.get('id'),
+                    "prompt_preview": problem['prompt'][:100] + "...",
+                    "gold_solution": problem['gold_solution'],
+                    "layer": r.get('layer'),
+                    "direction_idx": r.get('direction_idx'),
+                    "steering_strength": strength,
+                    "generated_text": r.get('generated_text'),
+                    "is_correct": is_correct,
+                    "status": "Correct" if is_correct else "Incorrect"
+                })
+
+            # 2. Log Summary Metrics
             self.logger.log({
                 "step": 8,
+                "type": "steering_summary_metrics",
                 "problem_id": problem.get('id'),
-                "layer_metrics": layer_metrics,
-                "steered_generations": [
-                    {
-                        "layer": r.get('layer'),
-                        "direction": r.get('direction_idx'),
-                        "text": r.get('generated_text'),
-                        "is_correct": grade_math(r.get('generated_text'), problem['gold_solution'])
-                    }
-                    for r in steered_results
-                ]
+                "layer_metrics": layer_metrics
             })
 
     def load_data(self, limit: int = None):

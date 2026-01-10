@@ -27,8 +27,13 @@ def set_style():
     plt.rcParams['axes.spines.right'] = False
 
 def load_all_logs(results_dir):
-    """Loads and merges all non-DRYRUN log files."""
-    files = glob.glob(os.path.join(results_dir, "*.jsonl"))
+    """Loads and merges all non-DRYRUN log files recursively."""
+    # Search recursively for .jsonl files
+    files = glob.glob(os.path.join(results_dir, "**/*.jsonl"), recursive=True)
+    if not files:
+        # Fallback to non-recursive if glob fails or just in case
+        files = glob.glob(os.path.join(results_dir, "*.jsonl"))
+        
     if not files:
         raise FileNotFoundError(f"No log files found in {results_dir}")
     
@@ -36,7 +41,7 @@ def load_all_logs(results_dir):
     files = [f for f in files if "DRYRUN" not in f]
     if not files:
         print("Warning: Only DRYRUN logs found. Loading those instead.")
-        files = glob.glob(os.path.join(results_dir, "*DRYRUN*.jsonl"))
+        files = glob.glob(os.path.join(results_dir, "**/*DRYRUN*.jsonl"), recursive=True)
         
     print(f"Loading {len(files)} log files...")
     
@@ -188,56 +193,100 @@ def plot_attribution(df, output_dir):
     plt.savefig(path, bbox_inches='tight', dpi=300)
     print(f"Saved plot to {path}")
 
-def plot_mani_dist(df, output_dir):
-    """Step 3/4: Plot Distance to Correct Manifold"""
-    step3_df = df[df['step'] == 3]
-    if step3_df.empty:
-        print("No Step 3 data found.")
+
+def plot_manifold_analysis(df, output_dir):
+    """Step 3/4: Manifold Distance & Forcing Impact"""
+    step3_df = df[df['step'] == 3].copy()
+    step4_df = df[df['step'] == 4].copy()
+    
+    if step3_df.empty and step4_df.empty:
+        print("No Step 3/4 data found.")
         return
 
-    plt.figure(figsize=(8, 6))
-    
-    # Histogram style
-    sns.histplot(
-        data=step3_df, 
-        x='distance_to_oracle', 
-        bins=20, 
-        kde=True,
-        color=COLORS['data_point'],
-        edgecolor='black',
-        linewidth=1,
-        line_kws={'color': COLORS['fit_line'], 'linewidth': 2} # KDE line style
-    )
-    
-    plt.title("Dist to Oracle Manifold")
-    plt.xlabel("L2 Dist to z*")
-    
-    plt.savefig(os.path.join(output_dir, "manifold_distance_dist.png"), bbox_inches='tight', dpi=300)
-    print(f"Saved plot to {os.path.join(output_dir, 'manifold_distance_dist.png')}")
+    # 1. Dist Distribution
+    if not step3_df.empty:
+        plt.figure(figsize=(8, 6))
+        sns.histplot(
+            data=step3_df, 
+            x='distance_to_oracle', 
+            bins=20, 
+            kde=True,
+            color=COLORS['data_point'],
+            edgecolor='black',
+            linewidth=1,
+            line_kws={'color': COLORS['fit_line'], 'linewidth': 2}
+        )
+        plt.title("L2 Distance: Local solution latents vs Oracle latent")
+        plt.xlabel("L2 Distance")
+        plt.savefig(os.path.join(output_dir, "manifold_distance_dist.png"), bbox_inches='tight', dpi=300)
+        print(f"Saved plot to {os.path.join(output_dir, 'manifold_distance_dist.png')}")
 
-def plot_drift(df, output_dir):
-    """Step 4: Drift after forcing"""
-    step4_df = df[df['step'] == 4]
-    if step4_df.empty:
-        return
+    # 2. Forcing Effectiveness (Scatter: Initial Drift vs Forced Drift)
+    # We need to join Step 3 (Initial) and Step 4 (Forced) on problem_id
+    if not step3_df.empty and not step4_df.empty:
+        merged = pd.merge(
+            step3_df[['problem_id', 'distance_to_oracle']], 
+            step4_df[['problem_id', 'drift_after_forcing']],
+            on='problem_id',
+            how='inner'
+        )
         
-    plt.figure(figsize=(8, 6))
-    sns.histplot(
-        data=step4_df, 
-        x='drift_after_forcing', 
-        bins=20, 
-        kde=True, 
-        color=COLORS['fit_line'], # Use orange for drift/forcing to distinguish
-        edgecolor='black',
-        linewidth=1
-    )
-    plt.title("Latent Drift After Forcing")
-    plt.xlabel("Drift from Oracle Traj")
-    
-    plt.savefig(os.path.join(output_dir, "prefix_forcing_drift.png"), bbox_inches='tight', dpi=300)
-    print(f"Saved plot to {os.path.join(output_dir, 'prefix_forcing_drift.png')}")
-
-
+        if not merged.empty:
+            plt.figure(figsize=(8, 8))
+            
+            # Scatter
+            sns.scatterplot(
+                data=merged,
+                x='distance_to_oracle',
+                y='drift_after_forcing',
+                color=COLORS['data_point'],
+                s=100,
+                edgecolor='black',
+                alpha=0.7
+            )
+            
+            # 1:1 Line (No improvement region)
+            max_val = max(merged['distance_to_oracle'].max(), merged['drift_after_forcing'].max())
+            plt.plot([0, max_val], [0, max_val], color='gray', linestyle='--', label='No Improvement (y=x)')
+            
+            plt.title("Effect of Prefix Forcing (Oracle Injection)")
+            plt.xlabel("Original Drift (Distance to Oracle)")
+            plt.ylabel("Drift After Forcing 30% Oracle")
+            plt.legend()
+            
+            plt.savefig(os.path.join(output_dir, "forcing_impact_scatter.png"), bbox_inches='tight', dpi=300)
+            print(f"Saved plot to {os.path.join(output_dir, 'forcing_impact_scatter.png')}")
+            
+            # 3. Improvement Distribution (Bar Chart)
+            # Calculate Improvement = Original - Forced
+            # Positive = Improvement (Metric Decreased)
+            merged['improvement'] = merged['distance_to_oracle'] - merged['drift_after_forcing']
+            merged = merged.sort_values('improvement', ascending=True) # Sort for visual clarity
+            merged['color'] = merged['improvement'].apply(lambda x: '#2ca02c' if x > 0 else '#d62728') # Green if positive, Red if negative
+            
+            plt.figure(figsize=(10, 6))
+            
+            # Since strict Bar Graph might be messy with many IDs, we use index as x-axis
+            plt.bar(
+                range(len(merged)), 
+                merged['improvement'], 
+                color=merged['color'],
+                edgecolor='none',
+                width=1.0
+            )
+            
+            plt.axhline(0, color='black', linewidth=1)
+            plt.title("Improvement in Latent Drift after Forcing 30% Oracle")
+            plt.xlabel("Problem Instance (Sorted by Improvement)")
+            plt.ylabel("Reduction in Drift (Original - Forced)")
+            
+            # Optional: Add text stats
+            pos_pct = (merged['improvement'] > 0).mean() * 100
+            plt.text(0.05, 0.95, f"{pos_pct:.1f}% Improved", transform=plt.gca().transAxes, 
+                     verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
+            plt.savefig(os.path.join(output_dir, "forcing_improvement_bar.png"), bbox_inches='tight', dpi=300)
+            print(f"Saved plot to {os.path.join(output_dir, 'forcing_improvement_bar.png')}")
 
 def plot_clustering_distinctness(df, output_dir):
     """Step 7: Clustering & Distinctness"""
@@ -267,20 +316,30 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results_dir", default="experiments/results")
     parser.add_argument("--output_dir", default="experiments/plots")
+    parser.add_argument("--file", default=None, help="Specific file to plot (overrides results_dir search)")
     args = parser.parse_args()
     
     os.makedirs(args.output_dir, exist_ok=True)
     
     try:
         set_style()
-        df = load_all_logs(args.results_dir)
+        
+        if args.file:
+             print(f"Loading specific file: {args.file}")
+             data = []
+             with open(args.file, 'r') as f:
+                 for line in f:
+                     if line.strip(): data.append(json.loads(line))
+             df = pd.DataFrame(data)
+        else:
+             df = load_all_logs(args.results_dir)
         
         plot_similarity_analysis(df, args.output_dir)
-        plot_mani_dist(df, args.output_dir)
-        plot_drift(df, args.output_dir)
+        # Replaced separate plots with unified one
+        plot_manifold_analysis(df, args.output_dir) 
         plot_attribution(df, args.output_dir)
         plot_clustering_distinctness(df, args.output_dir)
-        
+    
     except Exception as e:
         print(f"Error extracting plots: {e}")
         import traceback
